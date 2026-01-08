@@ -14,6 +14,18 @@ Parameters:
     Description: Environment name
 
 Resources:
+  # SSM Parameter for version tracking
+  VersionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ApplicationName}/${Environment}/version'
+      Type: String
+      Value: '1.0.0'
+      Description: !Sub 'Current version for ${ApplicationName} ${Environment}'
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: !Ref Environment
+
   ECRRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -65,3 +77,9 @@ Outputs:
     Value: !Ref ECRRepository
     Export:
       Name: !Sub '${ApplicationName}-${Environment}-ECR-Name'
+  
+  VersionParameterName:
+    Description: SSM Parameter name for version tracking
+    Value: !Ref VersionParameter
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-Version-Parameter'

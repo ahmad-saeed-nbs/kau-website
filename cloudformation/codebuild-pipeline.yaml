@@ -1,11 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CodeBuild and CodePipeline for Laravel Application'
+Description: 'CodePipeline and CodeBuild for Laravel Application CI/CD'
 
 Parameters:
   ApplicationName:
     Type: String
-    Default: laravel-app
+    Default: kau
     Description: Name of the application
+    MinLength: 1
   
   Environment:
     Type: String
@@ -16,19 +17,64 @@ Parameters:
   GitHubOwner:
     Type: String
     Description: GitHub repository owner
+    MinLength: 1
   
   GitHubRepo:
     Type: String
     Description: GitHub repository name
+    MinLength: 1
   
   GitHubBranch:
     Type: String
     Default: main
-    Description: GitHub branch to build from
+    Description: Branch to trigger CodePipeline (e.g., 'main')
+    MinLength: 1
+  
+  GitHubConnectionArn:
+    Type: String
+    Description: ARN of the existing CodeStar Connection to GitHub
+    MinLength: 1
+    Default: arn:aws:codeconnections:eu-west-1:972841066890:connection/dbb60712-18ca-445b-a90a-ba77fd454072
   
   ECRRepositoryURI:
     Type: String
     Description: ECR Repository URI (from ECR stack output)
+    MinLength: 1
+  
+  VersionParameterName:
+    Type: String
+    Description: SSM Parameter name for version tracking (from ECR stack output)
+    MinLength: 1
+  
+  BuildSpecFilePath:
+    Type: String
+    Description: Path to the buildspec file in the repository
+    Default: buildspec.yml
+  
+  CodeBuildImage:
+    Type: String
+    Description: CodeBuild environment image
+    Default: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+  
+  CodeBuildComputeType:
+    Type: String
+    Description: CodeBuild compute type
+    Default: BUILD_GENERAL1_MEDIUM
+    AllowedValues:
+      - BUILD_GENERAL1_SMALL
+      - BUILD_GENERAL1_MEDIUM
+      - BUILD_GENERAL1_LARGE
+      - BUILD_GENERAL1_2XLARGE
+  
+  TriggerPath:
+    Type: String
+    Description: Path in the repository to trigger the pipeline
+    Default: "*"
+  
+  ArtifactKmsKeyArn:
+    Type: String
+    Description: KMS Key ARN for S3 encryption
+    Default: alias/aws/s3
 
 Resources:
   # S3 Bucket for CodePipeline artifacts
@@ -49,10 +95,9 @@ Resources:
         RestrictPublicBuckets: true
 
   # CodeBuild Service Role
-  CodeBuildServiceRole:
+  CodeBuildRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ApplicationName}-${Environment}-codebuild-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -61,7 +106,7 @@ Resources:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: CodeBuildPolicy
+        - PolicyName: CodeBuildLaravelPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -70,13 +115,25 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
               - Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:GetObjectVersion
                   - s3:PutObject
-                Resource: !Sub '${ArtifactsBucket}/*'
+                  - s3:ListBucket
+                Resource:
+                  - !Sub '${ArtifactsBucket.Arn}'
+                  - !Sub '${ArtifactsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VersionParameterName}'
+              - Effect: Allow
+                Action:
+                  - codeconnections:UseConnection
+                Resource: !Ref GitHubConnectionArn
               - Effect: Allow
                 Action:
                   - ecr:BatchCheckLayerAvailability
@@ -88,12 +145,27 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:PutImage
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                  - kms:ReEncrypt*
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                  - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/*'
+      RoleName: !Sub '${ApplicationName}-${Environment}-codebuild-role-${AWS::StackName}'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref ApplicationName
 
   # CodePipeline Service Role
-  CodePipelineServiceRole:
+  CodePipelineRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ApplicationName}-${Environment}-codepipeline-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -102,38 +174,58 @@ Resources:
               Service: codepipeline.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: CodePipelinePolicy
+        - PolicyName: CodePipelineLaravelPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
+                  - codeconnections:UseConnection
+                Resource: !Ref GitHubConnectionArn
+              - Effect: Allow
+                Action:
                   - s3:GetObject
                   - s3:GetObjectVersion
                   - s3:PutObject
-                  - s3:GetBucketVersioning
+                  - s3:ListBucket
                 Resource:
-                  - !Sub '${ArtifactsBucket}/*'
-                  - !Ref ArtifactsBucket
+                  - !Sub '${ArtifactsBucket.Arn}'
+                  - !Sub '${ArtifactsBucket.Arn}/*'
               - Effect: Allow
                 Action:
                   - codebuild:BatchGetBuilds
                   - codebuild:StartBuild
                 Resource: !GetAtt CodeBuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                  - kms:ReEncrypt*
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                  - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/*'
+      RoleName: !Sub '${ApplicationName}-${Environment}-codepipeline-role-${AWS::StackName}'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref ApplicationName
 
   # CodeBuild Project
   CodeBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub '${ApplicationName}-${Environment}-build'
+      Name: !Sub '${ApplicationName}-${Environment}-codebuild'
       Description: !Sub 'Build project for ${ApplicationName} ${Environment}'
-      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts:
         Type: CODEPIPELINE
       Environment:
         Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_MEDIUM
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        ComputeType: !Ref CodeBuildComputeType
+        Image: !Ref CodeBuildImage
         PrivilegedMode: true
         EnvironmentVariables:
           - Name: AWS_DEFAULT_REGION
@@ -146,65 +238,46 @@ Resources:
             Value: !Ref ECRRepositoryURI
           - Name: APP_ENV
             Value: !Ref Environment
+          - Name: VERSION_PARAMETER_NAME
+            Value: !Ref VersionParameterName
       Source:
         Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            pre_build:
-              commands:
-                - echo Logging in to Amazon ECR...
-                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-                - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
-                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
-                - IMAGE_TAG=${COMMIT_HASH:=latest}
-                - VERSION_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
-                - echo Build started on `date`
-                - echo Building the Docker image...
-            build:
-              commands:
-                - docker build -t $IMAGE_REPO_NAME:latest --build-arg APP_ENV=$APP_ENV .
-                - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:latest
-                - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:$IMAGE_TAG
-                - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:$VERSION_TAG
-            post_build:
-              commands:
-                - echo Build completed on `date`
-                - echo Pushing the Docker images...
-                - docker push $REPOSITORY_URI:latest
-                - docker push $REPOSITORY_URI:$IMAGE_TAG
-                - docker push $REPOSITORY_URI:$VERSION_TAG
-                - echo Writing image definitions file...
-                - printf '[{"name":"laravel-app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
-          artifacts:
-            files:
-              - imagedefinitions.json
+        BuildSpec: !Ref BuildSpecFilePath
+      TimeoutInMinutes: 60
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref ApplicationName
 
   # CodePipeline
   CodePipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      Name: !Sub '${ApplicationName}-${Environment}-pipeline'
-      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Name: !Sub '${ApplicationName}-${Environment}-codepipeline'
+      RoleArn: !GetAtt CodePipelineRole.Arn
       ArtifactStore:
         Type: S3
         Location: !Ref ArtifactsBucket
+        EncryptionKey:
+          Type: KMS
+          Id: !Ref ArtifactKmsKeyArn
       Stages:
         - Name: Source
           Actions:
             - Name: SourceAction
               ActionTypeId:
                 Category: Source
-                Owner: ThirdParty
-                Provider: GitHub
+                Owner: AWS
+                Provider: CodeStarSourceConnection
                 Version: '1'
               Configuration:
-                Owner: !Ref GitHubOwner
-                Repo: !Ref GitHubRepo
-                Branch: !Ref GitHubBranch
-                OAuthToken: '{{resolve:secretsmanager:github-token:SecretString:token}}'
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub '${GitHubOwner}/${GitHubRepo}'
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
               OutputArtifacts:
-                - Name: SourceOutput
+                - Name: source-artifact
         - Name: Build
           Actions:
             - Name: BuildAction
@@ -215,20 +288,81 @@ Resources:
                 Version: '1'
               Configuration:
                 ProjectName: !Ref CodeBuildProject
+                EnvironmentVariables: !Sub |
+                  [
+                    {
+                      "name": "IMAGE_URI",
+                      "value": "${ECRRepositoryURI}"
+                    },
+                    {
+                      "name": "VERSION_PARAMETER_NAME",
+                      "value": "${VersionParameterName}"
+                    },
+                    {
+                      "name": "APP_ENV",
+                      "value": "${Environment}"
+                    }
+                  ]
               InputArtifacts:
-                - Name: SourceOutput
+                - Name: source-artifact
               OutputArtifacts:
-                - Name: BuildOutput
+                - Name: build-artifact
+      Triggers:
+        - ProviderType: CodeStarSourceConnection
+          GitConfiguration:
+            SourceActionName: SourceAction
+            Push:
+              - Branches:
+                  Includes:
+                    - !Ref GitHubBranch
+                FilePaths:
+                  Includes:
+                    - !Ref TriggerPath
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref ApplicationName
 
 Outputs:
   PipelineName:
     Description: Name of the CodePipeline
-    Value: !Ref CodePipeline
+    Value: !Sub '${ApplicationName}-${Environment}-codepipeline'
     Export:
       Name: !Sub '${ApplicationName}-${Environment}-Pipeline-Name'
+  
+  BuildProjectName:
+    Description: Name of the CodeBuild project
+    Value: !Sub '${ApplicationName}-${Environment}-codebuild'
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-Build-Project-Name'
+  
+  BuildProjectArn:
+    Description: ARN of the CodeBuild project
+    Value: !GetAtt CodeBuildProject.Arn
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-Build-Project-Arn'
   
   ArtifactsBucketName:
     Description: Name of the S3 bucket for pipeline artifacts
     Value: !Ref ArtifactsBucket
     Export:
       Name: !Sub '${ApplicationName}-${Environment}-Artifacts-Bucket'
+  
+  CodeBuildRoleArn:
+    Description: ARN of the CodeBuild service role
+    Value: !GetAtt CodeBuildRole.Arn
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-CodeBuild-Role-Arn'
+  
+  CodePipelineRoleArn:
+    Description: ARN of the CodePipeline service role
+    Value: !GetAtt CodePipelineRole.Arn
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-CodePipeline-Role-Arn'
+  
+  GitHubConnectionArn:
+    Description: GitHub Connection ARN used for source integration
+    Value: !Ref GitHubConnectionArn
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-GitHub-Connection-Arn'

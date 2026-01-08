@@ -10,6 +10,7 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: laravel-app-production
+  VERSION_PARAMETER_NAME: /laravel-app/production/version
 
 jobs:
   test:
@@ -123,6 +124,9 @@ jobs:
     needs: [test, security-scan]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_tag: ${{ steps.version.outputs.version_tag }}
 
     steps:
     - name: Checkout code
@@ -153,6 +157,25 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
 
+    - name: Get and increment version
+      id: version
+      run: |
+        # Get current version from SSM Parameter
+        CURRENT_VERSION=$(aws ssm get-parameter --name ${{ env.VERSION_PARAMETER_NAME }} --query 'Parameter.Value' --output text)
+        echo "Current version: $CURRENT_VERSION"
+        
+        # Increment patch version
+        IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+        MAJOR=${VERSION_PARTS[0]}
+        MINOR=${VERSION_PARTS[1]}
+        PATCH=${VERSION_PARTS[2]}
+        NEW_PATCH=$((PATCH + 1))
+        NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+        
+        echo "New version: $NEW_VERSION"
+        echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "version_tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -162,12 +185,23 @@ jobs:
         context: .
         file: ./Dockerfile.optimized
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.version_tag }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
         build-args: |
           APP_ENV=production
+
+    - name: Update version parameter
+      run: |
+        aws ssm put-parameter \
+          --name ${{ env.VERSION_PARAMETER_NAME }} \
+          --value ${{ steps.version.outputs.version }} \
+          --overwrite
+        echo "✅ Version parameter updated to ${{ steps.version.outputs.version }}"
 
     - name: Scan Docker image for vulnerabilities
       uses: aquasecurity/trivy-action@master
@@ -191,7 +225,8 @@ jobs:
     - name: Notify deployment success
       run: |
         echo "🚀 Deployment successful!"
-        echo "Image pushed to ECR with tags: latest, ${{ github.sha }}"
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          echo "Version tag: ${GITHUB_REF#refs/tags/}"
-        fi
+        echo "New version: ${{ needs.build-and-push.outputs.version }}"
+        echo "Image tags pushed:"
+        echo "- latest"
+        echo "- ${{ github.sha }}"
+        echo "- ${{ needs.build-and-push.outputs.version_tag }}"
