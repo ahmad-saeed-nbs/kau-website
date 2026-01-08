@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"   # local testing only
+    restart: unless-stopped
+
+  kau-main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kau-main
+    env_file:
+      # - .env.local
+      - .env.production.local
+    environment:
+      - APP_SITE=main
+      - REDIS_HOST=redis
+    ports:
+      - "8080:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - redis
+
+  kau-faculty:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kau-faculty
+    env_file:
+      # - .env.local
+      - .env.production.local
+    environment:
+      - APP_SITE=faculty
+      - REDIS_HOST=redis
+    ports:
+      - "8081:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - redis

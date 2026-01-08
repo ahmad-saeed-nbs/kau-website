@@ -1,0 +1,36 @@
+services:
+  app-main:
+    build:
+      context: .
+      args:
+        APP_ENV: production
+    container_name: kau-main
+    env_file:
+      - .env
+    environment:
+      APP_SITE: main
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+
+  app-faculty:
+    build:
+      context: .
+      args:
+        APP_ENV: production
+    container_name: kau-faculty
+    env_file:
+      - .env
+    environment:
+      APP_SITE: faculty
+    ports:
+      - "8001:8000"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"

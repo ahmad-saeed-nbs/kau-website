@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  app-main:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: kau-main
+    env_file:
+      - .env
+    environment:
+      APP_SITE: main
+    ports:
+      - "8080:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - redis
+
+  app-faculty:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: kau-faculty
+    env_file:
+      - .env
+    environment:
+      APP_SITE: faculty
+    ports:
+      - "8081:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"

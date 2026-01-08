@@ -1,0 +1,89 @@
+# Multi-stage build for optimized production image
+FROM node:20-alpine AS node-builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install Node.js dependencies
+RUN npm ci --only=production
+
+# Copy source files and build assets
+COPY resources/ ./resources/
+COPY vite.config.js ./
+COPY tailwind.config.js ./tailwind.config.js 2>/dev/null || true
+
+# Build frontend assets
+RUN npm run build
+
+# PHP base image with extensions
+FROM php:8.3-cli-alpine AS php-base
+
+# Install system dependencies and PHP extensions
+RUN apk add --no-cache \
+    git \
+    unzip \
+    libzip-dev \
+    oniguruma-dev \
+    curl-dev \
+    openssl-dev \
+    linux-headers \
+    && docker-php-ext-install \
+        pcntl \
+        sockets \
+        pdo_mysql \
+        mbstring \
+        zip \
+        curl \
+    && apk add --no-cache --virtual .build-deps \
+        $PHPIZE_DEPS \
+        brotli-dev \
+    && pecl install redis swoole \
+    && docker-php-ext-enable redis swoole \
+    && apk del .build-deps
+
+# Install Composer
+COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
+
+# Production stage
+FROM php-base AS production
+
+WORKDIR /var/www/html
+
+# Create non-root user
+RUN addgroup -g 1000 -S laravel && \
+    adduser -u 1000 -S laravel -G laravel
+
+# Copy composer files first for better caching
+COPY composer.json composer.lock ./
+
+# Install PHP dependencies (production only)
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction
+
+# Copy application code
+COPY --chown=laravel:laravel . .
+
+# Copy built assets from node-builder
+COPY --from=node-builder --chown=laravel:laravel /app/public/build ./public/build
+
+# Set proper permissions
+RUN chown -R laravel:laravel /var/www/html \
+    && chmod -R 755 /var/www/html/storage \
+    && chmod -R 755 /var/www/html/bootstrap/cache
+
+# Run composer scripts
+RUN composer run-script post-autoload-dump
+
+# Switch to non-root user
+USER laravel
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Use optimized entry script
+ENTRYPOINT ["sh", "/var/www/html/docker-entry.sh"]

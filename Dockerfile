@@ -1,0 +1,36 @@
+# Base image with PHP 8.3 + CLI + extensions
+FROM php:8.3-cli
+
+WORKDIR /var/www/html
+
+# Install system dependencies and PHP extensions
+RUN apt-get update && apt-get install -y \
+    git unzip libzip-dev libonig-dev curl libcurl4-openssl-dev libssl-dev \
+    pkg-config libbrotli-dev \
+ && docker-php-ext-install \
+    pcntl \
+    sockets \
+    pdo_mysql \
+    mbstring \
+    zip \
+    curl \
+ && pecl install redis swoole \
+ && docker-php-ext-enable redis swoole
+
+# Copy Composer from official image
+COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
+
+# Copy project files
+COPY . .
+
+# Install PHP dependencies for production (optional)
+ARG APP_ENV=production
+RUN if [ "$APP_ENV" = "production" ]; then \
+        composer install --no-dev --optimize-autoloader; \
+    fi
+
+# Expose Octane port
+EXPOSE 8000
+
+# Entrypoint
+ENTRYPOINT ["sh", "/var/www/html/docker-entry.sh"]

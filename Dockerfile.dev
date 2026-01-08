@@ -1,0 +1,35 @@
+# Base PHP CLI image
+FROM php:8.3-cli
+
+WORKDIR /var/www/html
+
+# Install system dependencies for dev
+RUN apt-get update && apt-get install -y \
+    git \
+    unzip \
+    libzip-dev \
+    libonig-dev \
+    curl \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    inotify-tools \
+ && docker-php-ext-install pcntl \
+ && pecl install -o -f redis swoole \
+ && docker-php-ext-enable redis swoole \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Composer
+COPY --from=composer:2.8 /usr/bin/composer /usr/bin/composer
+
+# Copy application code
+COPY . .
+
+# Install dev dependencies
+RUN composer install
+
+# Expose Octane port for local testing
+EXPOSE 8000
+
+# Dev entrypoint with hot reload
+CMD ["php", "artisan", "octane:start", "--server=swoole", "--host=0.0.0.0", "--port=8000", "--workers=2", "--task-workers=4", "--max-requests=100", "--watch=true", "--watch-include=app,routes,config"]

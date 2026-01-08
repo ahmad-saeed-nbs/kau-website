@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  app-main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kau-main
+    env_file:
+      - .env
+    environment:
+      APP_SITE: main
+      APP_ENV: "${APP_ENV:-development}"
+      PORT: "${MAIN_PORT:-8000}"
+    ports:
+      - "${MAIN_PORT:-8080}:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - redis
+    command: ["sh", "/var/www/html/docker-entry.sh"]
+
+  app-faculty:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kau-faculty
+    env_file:
+      - .env
+    environment:
+      APP_SITE: faculty
+      APP_ENV: "${APP_ENV:-development}"
+      PORT: "${FACULTY_PORT:-8000}"
+    ports:
+      - "${FACULTY_PORT:-8081}:8000"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - redis
+    command: ["sh", "/var/www/html/docker-entry.sh"]
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
