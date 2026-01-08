@@ -12,7 +12,9 @@ RUN npm ci --only=production
 # Copy source files and build assets
 COPY resources/ ./resources/
 COPY vite.config.js ./
-COPY tailwind.config.js ./tailwind.config.js 2>/dev/null || true
+
+# Copy tailwind config if it exists (optional)
+COPY tailwind.config.* ./
 
 # Build frontend assets
 RUN npm run build
@@ -64,8 +66,8 @@ RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interactio
 # Copy application code
 COPY --chown=laravel:laravel . .
 
-# Copy built assets from node-builder
-COPY --from=node-builder --chown=laravel:laravel /app/public/build ./public/build
+# Copy built assets from node-builder (only if they exist)
+COPY --from=node-builder --chown=laravel:laravel /app/public/build ./public/build 2>/dev/null || true
 
 # Set proper permissions
 RUN chown -R laravel:laravel /var/www/html \

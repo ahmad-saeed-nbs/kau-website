@@ -19,10 +19,11 @@ phases:
       - echo "Getting current version from SSM Parameter..."
       - CURRENT_VERSION=$(aws ssm get-parameter --name $VERSION_PARAMETER_NAME --query 'Parameter.Value' --output text)
       - echo "Current version is $CURRENT_VERSION"
-      - IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-      - MAJOR=${VERSION_PARTS[0]}
-      - MINOR=${VERSION_PARTS[1]}
-      - PATCH=${VERSION_PARTS[2]}
+      - echo "Parsing version components..."
+      - MAJOR=$(echo $CURRENT_VERSION | cut -d'.' -f1)
+      - MINOR=$(echo $CURRENT_VERSION | cut -d'.' -f2)
+      - PATCH=$(echo $CURRENT_VERSION | cut -d'.' -f3)
+      - echo "Parsed - Major:$MAJOR Minor:$MINOR Patch:$PATCH"
       - NEW_PATCH=$((PATCH + 1))
       - NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
       - echo "New version will be $NEW_VERSION"
@@ -33,10 +34,8 @@ phases:
     commands:
       - echo "Build phase started on $(date)"
       - echo "Building the Docker image..."
-      - DOCKERFILE="Dockerfile"
-      - if [ -f "Dockerfile.optimized" ]; then DOCKERFILE="Dockerfile.optimized"; fi
-      - echo "Using Dockerfile:$DOCKERFILE"
-      - docker build -t $IMAGE_REPO_NAME:latest --build-arg APP_ENV=$APP_ENV -f $DOCKERFILE .
+      - echo "Using Dockerfile: Dockerfile"
+      - docker build -t $IMAGE_REPO_NAME:latest --build-arg APP_ENV=$APP_ENV .
       - echo "Tagging Docker image..."
       - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:latest
       - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:$IMAGE_TAG
@@ -48,7 +47,7 @@ phases:
       - echo "Post-build phase started on $(date)"
       - echo "Pushing the Docker images..."
       - docker push $REPOSITORY_URI:latest
-      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - docker push $REPOSITORY_URI:$IMAGE_TAG  
       - docker push $REPOSITORY_URI:$VERSION_TAG
       - echo "Docker images pushed successfully"
       - echo "Updating version parameter to $NEW_VERSION"
