@@ -235,7 +235,7 @@ Resources:
           - Name: AWS_ACCOUNT_ID
             Value: !Ref AWS::AccountId
           - Name: IMAGE_REPO_NAME
-            Value: !Sub '${ApplicationName}-${Environment}'
+            Value: !Select [1, !Split ['/', !Ref ECRRepositoryURI]]
           - Name: IMAGE_URI
             Value: !Ref ECRRepositoryURI
           - Name: APP_ENV
