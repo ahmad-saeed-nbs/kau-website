@@ -34,7 +34,7 @@ phases:
     commands:
       - echo "Build phase started on $(date)"
       - echo "Building the Docker image..."
-      - echo "Using Dockerfile: Dockerfile"
+      - echo "Using Dockerfile - Dockerfile"
       - docker build -t $IMAGE_REPO_NAME:latest --build-arg APP_ENV=$APP_ENV .
       - echo "Tagging Docker image..."
       - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:latest
@@ -47,7 +47,7 @@ phases:
       - echo "Post-build phase started on $(date)"
       - echo "Pushing the Docker images..."
       - docker push $REPOSITORY_URI:latest
-      - docker push $REPOSITORY_URI:$IMAGE_TAG  
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
       - docker push $REPOSITORY_URI:$VERSION_TAG
       - echo "Docker images pushed successfully"
       - echo "Updating version parameter to $NEW_VERSION"
