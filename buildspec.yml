@@ -19,15 +19,13 @@ phases:
       - echo "Getting current version from SSM Parameter..."
       - CURRENT_VERSION=$(aws ssm get-parameter --name $VERSION_PARAMETER_NAME --query 'Parameter.Value' --output text)
       - echo "Current version is $CURRENT_VERSION"
-      - |
-        # Increment patch version
-        IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-        MAJOR=${VERSION_PARTS[0]}
-        MINOR=${VERSION_PARTS[1]}
-        PATCH=${VERSION_PARTS[2]}
-        NEW_PATCH=$((PATCH + 1))
-        NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
-        echo "New version will be $NEW_VERSION"
+      - IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+      - MAJOR=${VERSION_PARTS[0]}
+      - MINOR=${VERSION_PARTS[1]}
+      - PATCH=${VERSION_PARTS[2]}
+      - NEW_PATCH=$((PATCH + 1))
+      - NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+      - echo "New version will be $NEW_VERSION"
       - VERSION_TAG="v$NEW_VERSION"
       - echo "Version tag is $VERSION_TAG"
 
@@ -35,12 +33,7 @@ phases:
     commands:
       - echo "Build phase started on $(date)"
       - echo "Building the Docker image..."
-      - |
-        if [ -f "Dockerfile.optimized" ]; then
-          DOCKERFILE="Dockerfile.optimized"
-        else
-          DOCKERFILE="Dockerfile"
-        fi
+      - if [ -f "Dockerfile.optimized" ]; then DOCKERFILE="Dockerfile.optimized"; else DOCKERFILE="Dockerfile"; fi
       - echo "Using Dockerfile: $DOCKERFILE"
       - docker build -t $IMAGE_REPO_NAME:latest --build-arg APP_ENV=$APP_ENV -f $DOCKERFILE .
       - echo "Tagging Docker image..."
@@ -64,9 +57,9 @@ phases:
       - printf '[{"name":"laravel-app","imageUri":"%s"}]' $REPOSITORY_URI:$VERSION_TAG > imagedefinitions.json
       - echo "Build completed on $(date)"
       - echo "Final image tags:"
-      - echo "  - latest: $REPOSITORY_URI:latest"
-      - echo "  - commit: $REPOSITORY_URI:$IMAGE_TAG"
-      - echo "  - version: $REPOSITORY_URI:$VERSION_TAG"
+      - echo "  - latest:$REPOSITORY_URI:latest"
+      - echo "  - commit:$REPOSITORY_URI:$IMAGE_TAG"
+      - echo "  - version:$REPOSITORY_URI:$VERSION_TAG"
 
 artifacts:
   files:
