@@ -34,8 +34,8 @@ phases:
       - echo "Build phase started on $(date)"
       - echo "Building the Docker image..."
       - DOCKERFILE="Dockerfile"
-      - '[ -f "Dockerfile.optimized" ] && DOCKERFILE="Dockerfile.optimized"'
-      - echo "Using Dockerfile: $DOCKERFILE"
+      - if [ -f "Dockerfile.optimized" ]; then DOCKERFILE="Dockerfile.optimized"; fi
+      - echo "Using Dockerfile:$DOCKERFILE"
       - docker build -t $IMAGE_REPO_NAME:latest --build-arg APP_ENV=$APP_ENV -f $DOCKERFILE .
       - echo "Tagging Docker image..."
       - docker tag $IMAGE_REPO_NAME:latest $REPOSITORY_URI:latest
