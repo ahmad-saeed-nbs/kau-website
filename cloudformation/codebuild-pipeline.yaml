@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CodePipeline and CodeBuild for Laravel Application CI/CD'
+Description: 'ECR Repository and CodePipeline/CodeBuild for Laravel Application CI/CD'
 
 Parameters:
   ApplicationName:
@@ -10,41 +10,27 @@ Parameters:
   
   Environment:
     Type: String
-    Default: production
-    AllowedValues: [development, staging, production]
+    Default: dev
     Description: Environment name
   
-  GitHubOwner:
+  RepositoryUrl:
     Type: String
-    Description: GitHub repository owner
+    Description: Full repository URL (e.g., https://github.com/owner/repo or https://bitbucket.org/owner/repo)
     MinLength: 1
+    AllowedPattern: '^https://(github\.com|bitbucket\.org|gitlab\.com)/[^/]+/[^/]+/?$'
+    ConstraintDescription: Must be a valid GitHub, Bitbucket, or GitLab repository URL
   
-  GitHubRepo:
-    Type: String
-    Description: GitHub repository name
-    MinLength: 1
-  
-  GitHubBranch:
+  RepoBranch:
     Type: String
     Default: main
     Description: Branch to trigger CodePipeline (e.g., 'main')
     MinLength: 1
   
-  GitHubConnectionArn:
+  RepoConnectionArn:
     Type: String
-    Description: ARN of the existing CodeStar Connection to GitHub
+    Description: ARN of the existing CodeStar Connection to Repository (works with GitHub, Bitbucket, GitLab)
     MinLength: 1
     Default: arn:aws:codeconnections:eu-west-1:972841066890:connection/dbb60712-18ca-445b-a90a-ba77fd454072
-  
-  ECRRepositoryURI:
-    Type: String
-    Description: ECR Repository URI (from ECR stack output)
-    MinLength: 1
-  
-  VersionParameterName:
-    Type: String
-    Description: SSM Parameter name for version tracking (from ECR stack output)
-    MinLength: 1
   
   BuildSpecFilePath:
     Type: String
@@ -77,6 +63,57 @@ Parameters:
     Default: alias/aws/s3
 
 Resources:
+  # SSM Parameter for version tracking
+  VersionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${ApplicationName}/${Environment}/version'
+      Type: String
+      Value: '1.0.0'
+      Description: !Sub 'Current version for ${ApplicationName} ${Environment}'
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: !Ref Environment
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${ApplicationName}-${Environment}-ecr-repo'
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 production images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["v"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep last 5 untagged images",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
   # S3 Bucket for CodePipeline artifacts
   ArtifactsBucket:
     Type: AWS::S3::Bucket
@@ -129,12 +166,12 @@ Resources:
                 Action:
                   - ssm:GetParameter
                   - ssm:PutParameter
-                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${VersionParameterName}'
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ApplicationName}/${Environment}/version'
               - Effect: Allow
                 Action:
                   - codeconnections:UseConnection
                   - codeconnections:GetConnectionToken
-                Resource: !Ref GitHubConnectionArn
+                Resource: !Ref RepoConnectionArn
               - Effect: Allow
                 Action:
                   - ecr:BatchCheckLayerAvailability
@@ -156,7 +193,7 @@ Resources:
                 Resource: 
                   - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
                   - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/*'
-      RoleName: !Sub '${ApplicationName}-${Environment}-codebuild-role-${AWS::StackName}'
+      RoleName: !Sub '${ApplicationName}-${Environment}-codebuild-role'
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -183,7 +220,7 @@ Resources:
                 Action:
                   - codeconnections:UseConnection
                   - codeconnections:GetConnectionToken
-                Resource: !Ref GitHubConnectionArn
+                Resource: !Ref RepoConnectionArn
               - Effect: Allow
                 Action:
                   - s3:GetObject
@@ -208,7 +245,7 @@ Resources:
                 Resource: 
                   - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
                   - !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/*'
-      RoleName: !Sub '${ApplicationName}-${Environment}-codepipeline-role-${AWS::StackName}'
+      RoleName: !Sub '${ApplicationName}-${Environment}-codepipeline-role'
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -235,13 +272,13 @@ Resources:
           - Name: AWS_ACCOUNT_ID
             Value: !Ref AWS::AccountId
           - Name: IMAGE_REPO_NAME
-            Value: !Select [1, !Split ['/', !Ref ECRRepositoryURI]]
+            Value: !Ref ECRRepository
           - Name: IMAGE_URI
-            Value: !Ref ECRRepositoryURI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}'
           - Name: APP_ENV
             Value: !Ref Environment
           - Name: VERSION_PARAMETER_NAME
-            Value: !Ref VersionParameterName
+            Value: !Sub '/${ApplicationName}/${Environment}/version'
       Source:
         Type: CODEPIPELINE
         BuildSpec: !Ref BuildSpecFilePath
@@ -274,9 +311,10 @@ Resources:
                 Provider: CodeStarSourceConnection
                 Version: '1'
               Configuration:
-                ConnectionArn: !Ref GitHubConnectionArn
-                FullRepositoryId: !Sub '${GitHubOwner}/${GitHubRepo}'
-                BranchName: !Ref GitHubBranch
+                ConnectionArn: !Ref RepoConnectionArn
+                # Extract owner/repo from URL: https://github.com/owner/repo -> owner/repo
+                FullRepositoryId: !Join ['/', [!Select [3, !Split ['/', !Ref RepositoryUrl]], !Select [4, !Split ['/', !Ref RepositoryUrl]]]]
+                BranchName: !Ref RepoBranch
                 OutputArtifactFormat: CODE_ZIP
               OutputArtifacts:
                 - Name: source-artifact
@@ -294,11 +332,11 @@ Resources:
                   [
                     {
                       "name": "IMAGE_URI",
-                      "value": "${ECRRepositoryURI}"
+                      "value": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}"
                     },
                     {
                       "name": "VERSION_PARAMETER_NAME",
-                      "value": "${VersionParameterName}"
+                      "value": "/${ApplicationName}/${Environment}/version"
                     },
                     {
                       "name": "APP_ENV",
@@ -316,7 +354,7 @@ Resources:
             Push:
               - Branches:
                   Includes:
-                    - !Ref GitHubBranch
+                    - !Ref RepoBranch
                 FilePaths:
                   Includes:
                     - !Ref TriggerPath
@@ -363,8 +401,32 @@ Outputs:
     Export:
       Name: !Sub '${ApplicationName}-${Environment}-CodePipeline-Role-Arn'
   
-  GitHubConnectionArn:
-    Description: GitHub Connection ARN used for source integration
-    Value: !Ref GitHubConnectionArn
+  RepoConnectionArn:
+    Description: Repository Connection ARN used for source integration
+    Value: !Ref RepoConnectionArn
     Export:
-      Name: !Sub '${ApplicationName}-${Environment}-GitHub-Connection-Arn'
+      Name: !Sub '${ApplicationName}-${Environment}-Repo-Connection-Arn'
+  
+  RepositoryUrl:
+    Description: Repository URL used for source integration
+    Value: !Ref RepositoryUrl
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-Repository-Url'
+  
+  RepositoryId:
+    Description: Extracted Repository ID (owner/repo format)
+    Value: !Join ['/', [!Select [3, !Split ['/', !Ref RepositoryUrl]], !Select [4, !Split ['/', !Ref RepositoryUrl]]]]
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-Repository-Id'
+  
+  ECRRepositoryURI:
+    Description: ECR Repository URI
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}'
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-ECR-URI'
+  
+  ECRRepositoryName:
+    Description: ECR Repository Name
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub '${ApplicationName}-${Environment}-ECR-Name'
