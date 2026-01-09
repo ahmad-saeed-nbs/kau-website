@@ -55,7 +55,7 @@ Parameters:
   TriggerPath:
     Type: String
     Description: Path in the repository to trigger the pipeline
-    Default: "*"
+    Default: "**/*"
   
   ArtifactKmsKeyArn:
     Type: String
